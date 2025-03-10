@@ -1,8 +1,12 @@
 #include <assert.h>
+#include <bits/getopt_core.h>
 #include <dirent.h>
 #include <errno.h>
 #include <grp.h>
+#include <linux/limits.h>
 #include <pwd.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +22,8 @@
 static struct ls_options {
   bool show_hidden;
   bool long_format;
+
+  bool debug;
 } lsopts;
 
 static struct allignment {
@@ -26,6 +32,18 @@ static struct allignment {
   size_t max_group;
   size_t max_size;
 } allign;
+
+int create_path_string(char *str, size_t size, const char *directory,
+                       const char *filename) {
+  char last_symb = directory[strlen(directory) - 1];
+  if (last_symb == '.') {
+    snprintf(str, size, "%s", filename);
+  } else if (last_symb == '/') {
+    snprintf(str, size, "%s%s", directory, filename);
+  } else {
+    snprintf(str, size, "%s/%s", directory, filename);
+  }
+}
 
 void print_info(const char *file) {
   if (lsopts.long_format) {
@@ -70,7 +88,6 @@ void print_info(const char *file) {
   } else {
     printf("%s ", file);
   }
-  
 }
 
 // to sort string in the output
@@ -78,9 +95,11 @@ int compare(const void *a, const void *b) {
   return strcmp(*(const char **)a, *(const char **)b);
 }
 
-void calculate_alignment(struct dirent *entry) {
+void calculate_alignment(const char *directory, struct dirent *entry) {
   struct stat file_stat;
-  if (stat(entry->d_name, &file_stat) == -1) {
+  char full_path[PATH_MAX];
+  create_path_string(full_path, sizeof(full_path), directory, entry->d_name);
+  if (stat(full_path, &file_stat) == -1) {
     perror(strerror(errno));
     exit(EXIT_FAILURE);
   }
@@ -110,20 +129,26 @@ void calculate_alignment(struct dirent *entry) {
 /*
  @return number of proccesed files
 */
-size_t process_directory(DIR *dir, char **filenames) {
+size_t process_directory(const char *directory, DIR *dir, char **filenames) {
   size_t count = 0;
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {
+    if (lsopts.debug) { // Debugging
+      printf("DEBUG: Found file -> %s\n", entry->d_name);
+    }
     if (!lsopts.show_hidden && entry->d_name[0] == '.') {
       continue;
     }
 
     if (count < MAX_FILES) {
-      filenames[count] = strdup(entry->d_name);
+      if (!(filenames[count] = strdup(entry->d_name))) {
+        perror("strdup");
+        exit(EXIT_FAILURE);
+      }
       ++count;
-      calculate_alignment(entry);
+      calculate_alignment(directory, entry);
     } else {
-      printf("Too many files in directory. Max count of giles is %d\n",
+      printf("Too many files in directory. Max count of files is %d\n",
              MAX_FILES);
       break;
     }
@@ -139,14 +164,21 @@ void ls(const char *directory) {
   }
 
   char *filenames[MAX_FILES];
-  size_t count = process_directory(dir, filenames);
+  size_t count = process_directory(directory, dir, filenames);
 
   closedir(dir);
 
   qsort(filenames, count, sizeof(char *), compare);
 
-  for (int i = 0; i < count; ++i) {
-    print_info(filenames[i]);
+  for (size_t i = 0; i < count; ++i) {
+    char full_path[PATH_MAX];
+
+    create_path_string(full_path, sizeof(full_path), directory, filenames[i]);
+    if (lsopts.debug) { // Debugging
+      printf("DEBUG: full_path = '%s'\n", full_path);
+    }
+    print_info(full_path);
+
     free(filenames[i]);
   }
 }
@@ -167,10 +199,10 @@ void print_help(char *programName) {
   printf("\n");
 }
 
-void handle_options(int argc, char *argv[]) {
+void handle_options(int argc, char **argv) {
   // In other words we can have -a, -l or -h as an option.
   // Other symbols will cause an error
-  const char *possible_options = "alh";
+  const char *possible_options = "alhd";
   int opt;
 
   while ((opt = getopt(argc, argv, possible_options)) != -1) {
@@ -187,17 +219,28 @@ void handle_options(int argc, char *argv[]) {
       print_help(argv[0]);
       exit(EXIT_SUCCESS);
     }
+    case 'd': {
+      lsopts.debug = true;
+    }
     }
   }
 }
 
-int main(int argc, char *argv[]) {
-  const char *path = (argc > 1) ? argv[1] : ".";
+int main(int argc, char **argv) {
   handle_options(argc, argv);
 
-  ls(path);
-
-  printf("\n");
+  // After getopt() 'optind' points to first argument, that isn't an option
+  // No path is provided. List current directory
+  if (optind == argc) {
+    ls(".");
+  } else {
+    // Several paths are provided. List all
+    for (int i = optind; i < argc; ++i) {
+      printf("%s:\n", argv[i]);
+      ls(argv[i]);
+      printf("\n");
+    }
+  }
 
   return EXIT_SUCCESS;
 }

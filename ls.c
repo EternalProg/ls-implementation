@@ -33,7 +33,7 @@ static struct allignment {
   size_t max_size;
 } allign;
 
-int create_path_string(char *str, size_t size, const char *directory,
+void create_path_string(char *str, size_t size, const char *directory,
                        const char *filename) {
   char last_symb = directory[strlen(directory) - 1];
   if (last_symb == '.') {
